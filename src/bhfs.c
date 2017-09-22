@@ -333,14 +333,17 @@ static int bhfs_open(const char *path, struct fuse_file_info *fi)
 	char f_path[MAX_PATH];
 
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
-			
+	
+	fi->nonseekable = 1;
+
 	full_path(f_path, path);
 	
 	res = open(f_path, fi->flags);
 	if (res == -1)
 		return -errno;
 
-	close(res);
+	fi->fh = res;
+
 	return 0;
 }
 
@@ -355,16 +358,12 @@ static int bhfs_read(const char *path, char *buf, size_t size, off_t offset,
 		
 	full_path(f_path, path);
 	
-	(void) fi;
-	fd = open(f_path, O_RDONLY);
-	if (fd == -1)
-		return -errno;
+	fd = fi->fh;
 
 	res = pread(fd, buf, size, offset);
 	if (res == -1)
 		res = -errno;
 
-	close(fd);
 	return res;
 }
 
@@ -379,16 +378,12 @@ static int bhfs_write(const char *path, const char *buf, size_t size,
 		
 	full_path(f_path, path);
 	
-	(void) fi;
-	fd = open(f_path, O_WRONLY);
-	if (fd == -1)
-		return -errno;
+	fd = fi->fh;
 
 	res = pwrite(fd, buf, size, offset);
 	if (res == -1)
 		res = -errno;
 
-	close(fd);
 	return res;
 }
 
@@ -410,13 +405,14 @@ static int bhfs_statfs(const char *path, struct statvfs *stbuf)
 
 static int bhfs_release(const char *path, struct fuse_file_info *fi)
 {
-	/* Just a stub.	 This method is optional and can safely be left
-	   unimplemented */
+	int fd;
 
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
-	   	   
-	(void) path;
-	(void) fi;
+	
+	fd = fi->fh;
+
+	close(fd);
+
 	return 0;
 }
 
