@@ -34,6 +34,7 @@
 #endif
 
 #include "logger.h"
+#include "fdmanager.h"
 
 const int MAX_PATH = 1024;
 
@@ -298,6 +299,7 @@ static int bhfs_truncate(const char *path, off_t size)
 	char f_path[MAX_PATH];
 
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
+	bhfs_log(LOG_DEBUG, "In function %s - Truncate file '%s'", __func__, path); 
 			
 	full_path(f_path, path);
 	
@@ -330,20 +332,86 @@ static int bhfs_utimens(const char *path, const struct timespec ts[2])
 static int bhfs_open(const char *path, struct fuse_file_info *fi)
 {
 	int res;
+	int ret;
 	char f_path[MAX_PATH];
+	struct bhfs_open_file *fd;
 
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
 	
 	fi->nonseekable = 1;
 
 	full_path(f_path, path);
-	
+
+	if (fi->flags & O_WRONLY || fi->flags & O_RDWR) {
+
+		bhfs_log(LOG_DEBUG, "In function %s - Open file '%s' "
+			"in write mode - BEGIN", __func__, path); 
+
+        fd = bhfs_new_open_file();
+
+        /* Do some magic forking/exec and piping :) */
+        // Make a pipe
+        int pipefds[2];
+        int pipe_fd_read, pipe_fd_write;
+
+        pipe(pipefds);
+        pipe_fd_read = pipefds[0]; // for the child
+        pipe_fd_write = pipefds[1]; // for the parent
+
+		bhfs_log(LOG_DEBUG, "In function %s - Preparing to fork", __func__); 
+
+        pid_t pid = fork();
+
+        if (pid < 0) return -1;
+        else if (pid == 0) {
+			// Child
+			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD", __func__);
+
+            // Connect the end of the pipe to stdin of the process
+            dup2(pipe_fd_read, 0);
+			close(pipe_fd_write);
+
+			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD - "
+				"Executing exernal process", __func__);
+			ret = execl("/usr/bin/base64","base64","-o",f_path, NULL);  
+			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD - "
+				"Something went wrong when calling the external process. Exiting.", __func__);
+			
+			exit(ret);
+		}
+		
+		// Parent
+		bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT", __func__);
+        fd->pid = pid;
+        close(pipe_fd_read);
+		fd->fh = pipe_fd_write;
+		bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT. "
+			"Children's PID is %d",  __func__, fd->pid);
+		bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT. "
+			"The write PIPE's file descriptor is %d",  __func__, fd->fh);
+
+		fi->fh = fd->fh;
+		
+        bhfs_f_list_append(fd);
+		bhfs_log(LOG_DEBUG, "In function %s - Open file '%s'"
+			"in write mode - END", __func__, path);
+        return 0;
+        
+    }
+	bhfs_log(LOG_DEBUG, "In function %s - Open file '%s' "
+		"in read mode - BEGIN", __func__, path); 
+
 	res = open(f_path, fi->flags);
 	if (res == -1)
 		return -errno;
 
 	fi->fh = res;
 
+	bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT. "
+		"The write PIPE's file descriptor is %d",  __func__, res);
+
+	bhfs_log(LOG_DEBUG, "In function %s - Open file '%s'"
+		"in read mode - END", __func__, path);
 	return 0;
 }
 
@@ -352,11 +420,22 @@ static int bhfs_read(const char *path, char *buf, size_t size, off_t offset,
 {
 	int fd;
 	int res;
-	char f_path[MAX_PATH];
+	struct bhfs_open_file *open_file;
 
-	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
+	bhfs_log(LOG_DEBUG, "In function %s - Reading file '%s' with fd=%d", __func__, path, fi->fh); 
 		
-	full_path(f_path, path);
+	open_file = bhfs_f_list_get(fi->fh);
+
+	/* 
+	TODO: is there a better way to handle this? 
+	Returning 0 seems to be OK with dd, 
+	which so far is the only one known to cause the issue.
+	*/
+	if (open_file != NULL) {
+		bhfs_log(LOG_WARNING, "In function %s - WARNING: Read attempt of file '%s' "
+			"which is opened for writing as a pipe with fd=%d", __func__, path, fi->fh);
+		return 0;
+	}
 	
 	fd = fi->fh;
 
@@ -372,15 +451,14 @@ static int bhfs_write(const char *path, const char *buf, size_t size,
 {
 	int fd;
 	int res;
-	char f_path[MAX_PATH];
+	struct bhfs_open_file *open_file;
 
-	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
-		
-	full_path(f_path, path);
+	bhfs_log(LOG_DEBUG, "In function %s - Writing file '%s' with fd=%d", __func__, path, fi->fh); 
 	
-	fd = fi->fh;
+	open_file = bhfs_f_list_get(fi->fh);
+	fd = open_file->fh;
 
-	res = pwrite(fd, buf, size, offset);
+	res = write(fd, buf, size);
 	if (res == -1)
 		res = -errno;
 
@@ -406,13 +484,36 @@ static int bhfs_statfs(const char *path, struct statvfs *stbuf)
 static int bhfs_release(const char *path, struct fuse_file_info *fi)
 {
 	int fd;
+	struct bhfs_open_file *open_file;
 
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
 	
+	open_file = bhfs_f_list_get(fi->fh);
+	
+	if (open_file != NULL) {
+		fd = open_file->fh;
+		bhfs_log(LOG_DEBUG, "In function %s - File descriptor %d is "
+			"a pipe. Closing.", __func__, fd); 
+		close(fd);
+		
+		int status;
+		int pid = open_file->pid;
+		bhfs_log(LOG_DEBUG, "In function %s - Waiting for associated "
+			"PID %d to complete.", __func__, pid);
+		waitpid(pid, &status, 0);
+
+		bhfs_f_list_delete(open_file);
+		bhfs_free_open_file(open_file);
+
+		bhfs_log(LOG_DEBUG, "In function %s - Returning.", __func__, pid);
+		return 0;
+	}
+
 	fd = fi->fh;
+	bhfs_log(LOG_DEBUG, "In function %s - File descriptor %d is a file. "
+		"Closing and returning.", __func__, fd);
 
 	close(fd);
-
 	return 0;
 }
 

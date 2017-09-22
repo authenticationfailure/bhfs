@@ -55,9 +55,9 @@ void bhfs_f_list_delete(struct bhfs_open_file *open_file_to_delete) {
 
     next_open_file = bhfs_f_list;
 
-    // Is it the last file?
+    // Is it the first file?
     if (next_open_file == open_file_to_delete) {
-        bhfs_f_list = NULL;
+        bhfs_f_list = next_open_file->next;
         return;
     }
 
