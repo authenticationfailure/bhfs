@@ -28,6 +28,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/time.h>
 #ifdef HAVE_SETXATTR
 #include <sys/xattr.h>
@@ -39,12 +41,12 @@
 const int MAX_PATH = 1024;
 
 char *base_path;
+char *gpg_recipient;
 
 struct bhfs_open_file *bhfs_f_list; 
 
-
 int full_path(char *f_path, const char *path) {
-	u_int f_path_size = 0;
+	int f_path_size = 0;
 	f_path_size = strlen(base_path) + strlen(path);
 
 	if (f_path_size < MAX_PATH) {
@@ -353,8 +355,10 @@ static int bhfs_open(const char *path, struct fuse_file_info *fi)
         // Make a pipe
         int pipefds[2];
         int pipe_fd_read, pipe_fd_write;
+	int pipe_ret;
 
-        pipe(pipefds);
+        pipe_ret = pipe(pipefds);
+	if (pipe_ret < 0) return -errno;
         pipe_fd_read = pipefds[0]; // for the child
         pipe_fd_write = pipefds[1]; // for the parent
 
@@ -362,7 +366,10 @@ static int bhfs_open(const char *path, struct fuse_file_info *fi)
 
         pid_t pid = fork();
 
-        if (pid < 0) return -1;
+        if (pid < 0) {
+		bhfs_log(LOG_ERROR, "In function %s - Fork failed", __func__);
+		return -errno;
+	}
         else if (pid == 0) {
 			// Child
 			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD", __func__);
@@ -373,11 +380,19 @@ static int bhfs_open(const char *path, struct fuse_file_info *fi)
 
 			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD - "
 				"Executing exernal process", __func__);
-			ret = execl("/usr/bin/base64","base64","-o",f_path, NULL);  
-			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD - "
-				"Something went wrong when calling the external process. Exiting.", __func__);
-			
-			exit(ret);
+			// ret = execl("/usr/bin/base64","base64","-o",f_path, NULL);  
+			ret = execlp("gpg","gpg", \
+					"--encrypt", \
+					"--yes", \
+					"--recipient", gpg_recipient, \
+					"--output", f_path, \
+					NULL); 
+		        // If we are here execlp failed
+			if (ret < 0) {	
+				bhfs_log(LOG_ERROR, "In function %s - Inside CHILD - "
+					"Something went wrong when calling the external process. Exiting.", __func__);
+				exit(-errno);
+			}
 		}
 		
 		// Parent
@@ -489,18 +504,31 @@ static int bhfs_release(const char *path, struct fuse_file_info *fi)
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
 	
 	open_file = bhfs_f_list_get(fi->fh);
-	
+
+        bhfs_log(LOG_DEBUG, "In function %s, returned from bhfs_f_list_get", __func__);
+
 	if (open_file != NULL) {
 		fd = open_file->fh;
 		bhfs_log(LOG_DEBUG, "In function %s - File descriptor %d is "
 			"a pipe. Closing.", __func__, fd); 
+		
 		close(fd);
 		
 		int status;
 		int pid = open_file->pid;
 		bhfs_log(LOG_DEBUG, "In function %s - Waiting for associated "
 			"PID %d to complete.", __func__, pid);
-		waitpid(pid, &status, 0);
+
+		/* 
+		Reap zombie processes without blocking.
+		A simple waitpid causes the wait to hang indefinitely
+		when files are accessed at the same time.
+		This approach leaves some zombie processes temporary
+		hanging around until the next time a file is closed.  
+		TODO: improved this by reaping the processes in
+		a handler registered for the SIGCHLD signal.
+		*/
+		while (waitpid((pid_t)-1, 0, WNOHANG)) {};
 
 		bhfs_f_list_delete(open_file);
 		bhfs_free_open_file(open_file);
@@ -669,6 +697,9 @@ int main(int argc, char *argv[])
 
 	// TODO: Change this so we can pass it from the command line
 	char *b_path = "/tmp/destination";
+	char *g_recipient = "do-not-use-in-production@no-reply.authenticationfailure.com";
 	base_path = b_path;
+	gpg_recipient = g_recipient;
+
 	return fuse_main(argc, argv, &bhfs_oper, NULL);
 }

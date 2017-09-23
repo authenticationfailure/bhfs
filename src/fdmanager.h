@@ -14,6 +14,6 @@ void bhfs_free_open_file(struct bhfs_open_file *new_open_file);
 
 void bhfs_f_list_append(struct bhfs_open_file *new_open_file);
 
-struct bhfs_open_file *bhfs_f_list_get(uint64_t fd);
+struct bhfs_open_file *bhfs_f_list_get(int fd);
 
 void bhfs_f_list_delete(struct bhfs_open_file *open_file_to_delete);

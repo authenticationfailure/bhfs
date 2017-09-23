@@ -31,19 +31,25 @@ void bhfs_f_list_append(struct bhfs_open_file *new_open_file) {
     pthread_mutex_unlock(&bhfs_f_list_mutex);
 }
 
-struct bhfs_open_file *bhfs_f_list_get(uint64_t fd) {
+struct bhfs_open_file *bhfs_f_list_get(int fd) {
     pthread_mutex_lock(&bhfs_f_list_mutex);
 
     struct bhfs_open_file *cur_open_file;
-    if (bhfs_f_list == NULL) return NULL;
+    if (bhfs_f_list == NULL) {
+        pthread_mutex_unlock(&bhfs_f_list_mutex);
+        return NULL;
+    }
     
     cur_open_file = bhfs_f_list;
     do {
-        if (cur_open_file->fh == fd) return cur_open_file;
+        if (cur_open_file->fh == fd) {
+            pthread_mutex_unlock(&bhfs_f_list_mutex);
+            return cur_open_file;
+        }
         cur_open_file = cur_open_file->next;
     } while (cur_open_file != NULL);
 
-    pthread_mutex_lock(&bhfs_f_list_mutex);
+    pthread_mutex_unlock(&bhfs_f_list_mutex);
     return NULL;
 }
 
@@ -51,13 +57,17 @@ void bhfs_f_list_delete(struct bhfs_open_file *open_file_to_delete) {
     struct bhfs_open_file *next_open_file;
 
     pthread_mutex_lock(&bhfs_f_list_mutex);
-    if (bhfs_f_list == NULL) return;
+    if (bhfs_f_list == NULL) {
+        pthread_mutex_unlock(&bhfs_f_list_mutex);
+        return;
+    }
 
     next_open_file = bhfs_f_list;
 
     // Is it the first file?
     if (next_open_file == open_file_to_delete) {
         bhfs_f_list = next_open_file->next;
+        pthread_mutex_unlock(&bhfs_f_list_mutex);
         return;
     }
 
@@ -70,7 +80,8 @@ void bhfs_f_list_delete(struct bhfs_open_file *open_file_to_delete) {
         next_open_file->next = open_file_to_delete->next;
     }
 
-    pthread_mutex_lock(&bhfs_f_list_mutex);
+    pthread_mutex_unlock(&bhfs_f_list_mutex);
+    return;
 }
 
 /*
