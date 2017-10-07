@@ -1,3 +1,12 @@
+/*
+  BHFS: Black Hole Filesystem
+  
+  Copyright (C) 2017	   David Turco
+
+  This program can be distributed under the terms of the GNU GPL.
+  See the file COPYING.
+*/
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>

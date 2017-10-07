@@ -1,0 +1,14 @@
+BHFS - Black Hole Filesystem
+======================================
+
+Author
+--------------------------------------
+
+Copyright (C) 2017	   David Turco  	
+
+
+Based on FUSE's fusexmp.c example file:
+Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
+Copyright (C) 2011       Sebastian Pipping <sebastian@pipping.org>
+
+

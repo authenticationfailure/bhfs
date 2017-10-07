@@ -1,12 +1,12 @@
 /*
-  FUSE: Filesystem in Userspace
+  BHFS: Black Hole Filesystem
+  
+  Copyright (C) 2017	   David Turco  	
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (C) 2011       Sebastian Pipping <sebastian@pipping.org>
 
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.
-
-  gcc -Wall fusexmp.c `pkg-config fuse --cflags --libs` -o fusexmp
 */
 
 #define FUSE_USE_VERSION 26
