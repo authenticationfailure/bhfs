@@ -48,7 +48,7 @@ struct bhfs_config {
 	int allow_other;
 };
 
-struct bhfs_open_file *bhfs_f_list; 
+//struct bhfs_open_file *bhfs_f_list; 
 struct bhfs_config conf;
 
 int full_path(char *f_path, const char *path) {
