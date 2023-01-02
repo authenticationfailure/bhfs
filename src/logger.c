@@ -1,7 +1,7 @@
 /*
   BHFS: Black Hole Filesystem
   
-  Copyright (C) 2017	   David Turco  	
+  Copyright (C) 2017-2023	   David Turco  	
 
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.

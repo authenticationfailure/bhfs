@@ -8,6 +8,7 @@ config.status
 .deps/
 config.h
 src/bhfs
+src/whfs
 
 ######################## Gitignore for C ######################
 #                                                             #

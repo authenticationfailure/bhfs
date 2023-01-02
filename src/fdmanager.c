@@ -1,7 +1,7 @@
 /*
   BHFS: Black Hole Filesystem
   
-  Copyright (C) 2017	   David Turco
+  Copyright (C) 2017-2023	   David Turco
 
   This program can be distributed under the terms of the GNU GPL.
   See the file COPYING.
@@ -24,7 +24,8 @@ struct bhfs_open_file *bhfs_new_open_file() {
     new_file->size = 0;
     new_file->pid = 0;
     new_file->next = NULL;
-
+    pthread_mutex_init(&(new_file->mutex), NULL); 
+    
     return new_file;
 } 
 

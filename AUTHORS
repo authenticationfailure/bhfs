@@ -4,7 +4,7 @@ BHFS - Black Hole Filesystem
 Author
 --------------------------------------
 
-Copyright (C) 2017	   David Turco  	
+Copyright (C) 2017-2023	   David Turco  	
 
 
 Based on FUSE's fusexmp.c example file:

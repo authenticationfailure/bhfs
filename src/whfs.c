@@ -1,7 +1,7 @@
 /*
-  BHFS: Black Hole Filesystem
+  WHFS: White Hole Filesystem
   
-  Copyright (C) 2017-2023  David Turco  	
+  Copyright (C) 2022-2023  David Turco  	
   Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
   Copyright (C) 2011       Sebastian Pipping <sebastian@pipping.org>
 
@@ -32,6 +32,7 @@
 #include <sys/wait.h>
 #include <sys/time.h>
 #include <stddef.h>
+#include <pthread.h>
 #ifdef HAVE_SETXATTR
 #include <sys/xattr.h>
 #endif
@@ -41,15 +42,14 @@
 
 const int MAX_PATH = 1024;
 
-struct bhfs_config {
+struct whfs_config {
 	char *recipient;
 	char *rootdir;
 	char *mountdir;
 	int allow_other;
 };
 
-//struct bhfs_open_file *bhfs_f_list; 
-struct bhfs_config conf;
+struct whfs_config conf;
 
 int full_path(char *f_path, const char *path) {
 	int f_path_size = 0;
@@ -65,12 +65,29 @@ int full_path(char *f_path, const char *path) {
 	return 0; 
 }
 
-static int bhfs_getattr(const char *path, struct stat *stbuf)
+static void *whfs_init(struct fuse_conn_info *conn)
+{
+    // Fuse declares itself FUSE_CAP_ASYNC_READ by default. This causes the kernel to 
+	// send multiple read requests in parallel, which causes a race condition.
+	// Here we disable async reads because handling async reads would be expensive for this use case
+	conn->async_read = 0;	
+	return NULL;
+}
+
+static int whfs_getattr(const char *path, struct stat *stbuf)
 {
 	int res;
 	char f_path[MAX_PATH];
 
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
+
+	// File size information is only approximate as we don't have a reliable way to return
+	// the actual size of the decrypted file without decrypting the entire file.
+	// This can have unwanted side effects with some applications, for example with tar, which returns the
+	// following error ultimately corrupting the file's data by padding the files in the archive:
+	//    File <filename> shrunk by <num> bytes, padding with zeros
+	// TODO: consider adding a mount option to return reliable file sizes with performance penalty.
+	bhfs_log(LOG_DEBUG, "WARNING: Currently, the returned file size is the size of the encrypted GPG file!!", __func__);
 
 	full_path(f_path, path);
 	res = lstat(f_path, stbuf);
@@ -80,7 +97,7 @@ static int bhfs_getattr(const char *path, struct stat *stbuf)
 	return 0;
 }
 
-static int bhfs_access(const char *path, int mask)
+static int whfs_access(const char *path, int mask)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -95,7 +112,7 @@ static int bhfs_access(const char *path, int mask)
 	return 0;
 }
 
-static int bhfs_readlink(const char *path, char *buf, size_t size)
+static int whfs_readlink(const char *path, char *buf, size_t size)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -112,7 +129,7 @@ static int bhfs_readlink(const char *path, char *buf, size_t size)
 }
 
 
-static int bhfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+static int whfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		       off_t offset, struct fuse_file_info *fi)
 {
 	DIR *dp;
@@ -142,32 +159,15 @@ static int bhfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	return 0;
 }
 
-static int bhfs_mknod(const char *path, mode_t mode, dev_t rdev)
+static int whfs_mknod(const char *path, mode_t mode, dev_t rdev)
 {
-	int res;
-	char f_path[MAX_PATH];
-	
-	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
-		
-	full_path(f_path, path);
-	
-	/* On Linux this could just be 'mknod(f_path, mode, rdev)' but this
-	   is more portable */
-	if (S_ISREG(mode)) {
-		res = open(f_path, O_CREAT | O_EXCL | O_WRONLY, mode);
-		if (res >= 0)
-			res = close(res);
-	} else if (S_ISFIFO(mode))
-		res = mkfifo(f_path, mode);
-	else
-		res = mknod(f_path, mode, rdev);
-	if (res == -1)
-		return -errno;
 
-	return 0;
+	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
+	// Do not allow
+	return -1;
 }
 
-static int bhfs_mkdir(const char *path, mode_t mode)
+static int whfs_mkdir(const char *path, mode_t mode)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -182,7 +182,7 @@ static int bhfs_mkdir(const char *path, mode_t mode)
 	return 0;
 }
 
-static int bhfs_unlink(const char *path)
+static int whfs_unlink(const char *path)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -197,7 +197,7 @@ static int bhfs_unlink(const char *path)
 	return 0;
 }
 
-static int bhfs_rmdir(const char *path)
+static int whfs_rmdir(const char *path)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -212,7 +212,7 @@ static int bhfs_rmdir(const char *path)
 	return 0;
 }
 
-static int bhfs_symlink(const char *from, const char *to)
+static int whfs_symlink(const char *from, const char *to)
 {
 	int res;
 	char f_to[MAX_PATH];
@@ -227,7 +227,7 @@ static int bhfs_symlink(const char *from, const char *to)
 	return 0;
 }
 
-static int bhfs_rename(const char *from, const char *to)
+static int whfs_rename(const char *from, const char *to)
 {
 	int res;
 	char f_from[MAX_PATH];
@@ -244,7 +244,7 @@ static int bhfs_rename(const char *from, const char *to)
 	return 0;
 }
 
-static int bhfs_link(const char *from, const char *to)
+static int whfs_link(const char *from, const char *to)
 {
 	int res;
 	char f_to[MAX_PATH];
@@ -259,7 +259,7 @@ static int bhfs_link(const char *from, const char *to)
 	return 0;
 }
 
-static int bhfs_chmod(const char *path, mode_t mode)
+static int whfs_chmod(const char *path, mode_t mode)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -274,7 +274,7 @@ static int bhfs_chmod(const char *path, mode_t mode)
 	return 0;
 }
 
-static int bhfs_chown(const char *path, uid_t uid, gid_t gid)
+static int whfs_chown(const char *path, uid_t uid, gid_t gid)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -289,24 +289,14 @@ static int bhfs_chown(const char *path, uid_t uid, gid_t gid)
 	return 0;
 }
 
-static int bhfs_truncate(const char *path, off_t size)
+static int whfs_truncate(const char *path, off_t size)
 {
-	int res;
-	char f_path[MAX_PATH];
-
-	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
-	bhfs_log(LOG_DEBUG, "In function %s - Truncate file '%s'", __func__, path); 
-			
-	full_path(f_path, path);
-	res = truncate(f_path, size);
-	if (res == -1)
-		return -errno;
-
-	return 0;
+	// not allowed
+	return -1;
 }
 
 #ifdef HAVE_UTIMENSAT
-static int bhfs_utimens(const char *path, const struct timespec ts[2])
+static int whfs_utimens(const char *path, const struct timespec ts[2])
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -324,9 +314,8 @@ static int bhfs_utimens(const char *path, const struct timespec ts[2])
 }
 #endif
 
-static int bhfs_open(const char *path, struct fuse_file_info *fi)
+static int whfs_open(const char *path, struct fuse_file_info *fi)
 {
-	int res;
 	int ret;
 	char f_path[MAX_PATH];
 	struct bhfs_open_file *fd;
@@ -334,97 +323,78 @@ static int bhfs_open(const char *path, struct fuse_file_info *fi)
 	bhfs_log(LOG_DEBUG, "In function %s", __func__); 
 	
 	fi->nonseekable = 1;
+	
+	// Set Direct IO, so that during the read operation we can return partial data.
+	// This is because we don't know the size of the decrypted file and read requests are 
+	// longer than the actual file because the size of the GPG file is returned.
+	fi->direct_io = 1;
 
 	full_path(f_path, path);
 
-	if (fi->flags & O_WRONLY || fi->flags & O_RDWR) {
-
-		bhfs_log(LOG_DEBUG, "In function %s - Open file '%s' "
-			"in write mode - BEGIN", __func__, path); 
-
-        fd = bhfs_new_open_file();
-
-        /* Do some magic forking/exec and piping :) */
-        // Make a pipe
-        int pipefds[2];
-        int pipe_fd_read, pipe_fd_write;
-		int pipe_ret;
-
-        pipe_ret = pipe(pipefds);
-		if (pipe_ret < 0) return -errno;
-
-        pipe_fd_read = pipefds[0]; // for the child
-        pipe_fd_write = pipefds[1]; // for the parent
-
-		bhfs_log(LOG_DEBUG, "In function %s - Preparing to fork", __func__); 
-
-        pid_t pid = fork();
-        if (pid < 0) {
-			bhfs_log(LOG_ERROR, "In function %s - Fork failed", __func__);
-			return -errno;
-		}
-        else if (pid == 0) {
-			// Child
-			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD", __func__);
-
-            // Connect the end of the pipe to stdin of the process
-            dup2(pipe_fd_read, 0);
-			close(pipe_fd_write);
-
-			bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD - "
-				"Executing exernal process", __func__);
-
-			ret = execlp("gpg","gpg", \
-					"--encrypt", \
-					"--compress-algo", "none", \
-					"--yes", \
-					"--recipient", conf.recipient, \
-					"--output", f_path, \
-					NULL); 
-		    // If we are here execlp failed
-			if (ret < 0) {	
-				bhfs_log(LOG_ERROR, "In function %s - Inside CHILD - "
-					"Something went wrong when calling the external process. Exiting.", __func__);
-				exit(-errno);
-			}
-		}
-		
-		// Parent
-		bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT", __func__);
-        fd->pid = pid;
-        close(pipe_fd_read);
-		fd->fh = pipe_fd_write;
-		bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT. "
-			"Children's PID is %d",  __func__, fd->pid);
-		bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT. "
-			"The write PIPE's file descriptor is %d",  __func__, fd->fh);
-
-		fi->fh = fd->fh;
-		
-        bhfs_f_list_append(fd);
-		bhfs_log(LOG_DEBUG, "In function %s - Open file '%s'"
-			"in write mode - END", __func__, path);
-        return 0;
-        
-    }
 	bhfs_log(LOG_DEBUG, "In function %s - Open file '%s' "
 		"in read mode - BEGIN", __func__, path); 
 
-	res = open(f_path, fi->flags);
-	if (res == -1)
+	fd = bhfs_new_open_file();
+
+	/* Do some magic forking/exec and piping :) */
+	// Make a pipe
+	int pipefds[2];
+	int pipe_fd_read, pipe_fd_write;
+	int pipe_ret;
+
+	pipe_ret = pipe(pipefds);
+	if (pipe_ret < 0) return -errno;
+
+	pipe_fd_read = pipefds[0]; // for the parent
+	pipe_fd_write = pipefds[1]; // for the child
+
+	bhfs_log(LOG_DEBUG, "In function %s - Preparing to fork", __func__); 
+
+	pid_t pid = fork();
+	if (pid < 0) {
+		bhfs_log(LOG_ERROR, "In function %s - Fork failed", __func__);
 		return -errno;
+	}
+	else if (pid == 0) {
+		// Child
+		bhfs_log(LOG_DEBUG, "In function %s - Inside CHILD", __func__);
 
-	fi->fh = res;
+		// Connect the end of the pipe to stdout of the process
+		dup2(pipe_fd_write, 1);
+		close(pipe_fd_read);
+		// DO NOT ADD ANY OUTPUT between dup2 and execlp
+		ret = execlp("gpg","gpg", \
+				"--decrypt", \
+				f_path, \
+				NULL);
 
+		// If we are here execlp failed
+		if (ret < 0) {	
+			bhfs_log(LOG_ERROR, "In function %s - Inside CHILD - "
+				"Something went wrong when calling the external process. Exiting.", __func__);
+			exit(-errno);
+		}
+	}
+	
+	// Parent
+	bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT", __func__);
+	fd->pid = pid;
+	close(pipe_fd_write);
+	fd->fh = pipe_fd_read;
 	bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT. "
-		"The write PIPE's file descriptor is %d",  __func__, res);
+		"Children's PID is %d",  __func__, fd->pid);
+	bhfs_log(LOG_DEBUG, "In function %s - Inside PARENT. "
+		"The read PIPE's file descriptor is %d",  __func__, fd->fh);
 
+	fi->fh = fd->fh;
+	
+	bhfs_f_list_append(fd);
 	bhfs_log(LOG_DEBUG, "In function %s - Open file '%s'"
 		"in read mode - END", __func__, path);
 	return 0;
 }
 
-static int bhfs_read(const char *path, char *buf, size_t size, off_t offset,
+static int whfs_read(const char *path, char *buf, size_t size, off_t offset,
 		    struct fuse_file_info *fi)
 {
 	int fd;
@@ -432,48 +402,50 @@ static int bhfs_read(const char *path, char *buf, size_t size, off_t offset,
 	struct bhfs_open_file *open_file;
 
 	bhfs_log(LOG_DEBUG, "In function %s - Reading file '%s' with fd=%d", __func__, path, fi->fh); 
-		
+
 	open_file = bhfs_f_list_get(fi->fh);
-
-	/* 
-	TODO: is there a better way to handle this? 
-	Returning 0 seems to be OK with dd, 
-	which so far is the only one known to cause the issue.
-	*/
-	if (open_file != NULL) {
-		bhfs_log(LOG_WARNING, "In function %s - WARNING: Read attempt of file '%s' "
-			"which is opened for writing as a pipe with fd=%d", __func__, path, fi->fh);
-		return 0;
-	}
 	
-	fd = fi->fh;
-	res = pread(fd, buf, size, offset);
-	if (res == -1)
-		res = -errno;
+	fd = open_file->fh;
+	bhfs_log(LOG_DEBUG, "In function %s - Reading from fd=%d, buf=%x, size=%d, offset=%d", __func__, fd, buf, size, offset); 
+	
+	// This code is not safe with async reads enabled.
+	// Because async reads would be expensive in this implementation, 
+	// we just disable them in *whfs_init
 
-	return res;
+	size_t read_size = 0;
+	size_t s;
+
+	pthread_mutex_lock(&(open_file->mutex));
+
+	// TODO: there's a bug here with big files. The last block is read but not returned
+	// to the invoking command like cp.
+	// The error is not present when mounting with the option -o direct_io.
+	// As a workaround we enforce direct io for the opened files
+	do // keep reading until the size is satisfied or EOF
+	{
+		s = size - read_size;
+		res = read(fd, buf + read_size, s);
+		if (res == -1) {
+			res = -errno;
+			pthread_mutex_unlock(&(open_file->mutex));
+			return res;
+		}
+		read_size = read_size + res;
+	} while (res > 0 && read_size < size);
+
+	pthread_mutex_unlock(&(open_file->mutex));
+
+	return read_size;
 }
 
-static int bhfs_write(const char *path, const char *buf, size_t size,
+static int whfs_write(const char *path, const char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
 {
-	int fd;
-	int res;
-	struct bhfs_open_file *open_file;
-
-	bhfs_log(LOG_DEBUG, "In function %s - Writing file '%s' with fd=%d", __func__, path, fi->fh); 
-	
-	open_file = bhfs_f_list_get(fi->fh);
-	fd = open_file->fh;
-
-	res = write(fd, buf, size);
-	if (res == -1)
-		res = -errno;
-
-	return res;
+	//write is not permitted
+	return -1;
 }
 
-static int bhfs_statfs(const char *path, struct statvfs *stbuf)
+static int whfs_statfs(const char *path, struct statvfs *stbuf)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -488,7 +460,7 @@ static int bhfs_statfs(const char *path, struct statvfs *stbuf)
 	return 0;
 }
 
-static int bhfs_release(const char *path, struct fuse_file_info *fi)
+static int whfs_release(const char *path, struct fuse_file_info *fi)
 {
 	int fd;
 	struct bhfs_open_file *open_file;
@@ -519,7 +491,10 @@ static int bhfs_release(const char *path, struct fuse_file_info *fi)
 		TODO: improved this by reaping the processes in
 		a handler registered for the SIGCHLD signal.
 		*/
-		while (waitpid((pid_t)-1, 0, WNOHANG)) {};
+		int p;
+		do {
+        	p = waitpid(-1, NULL, WNOHANG);
+    	} while (p != (pid_t)0 && p != (pid_t)-1);
 
 		bhfs_f_list_delete(open_file);
 		bhfs_free_open_file(open_file);
@@ -536,7 +511,7 @@ static int bhfs_release(const char *path, struct fuse_file_info *fi)
 	return 0;
 }
 
-static int bhfs_fsync(const char *path, int isdatasync,
+static int whfs_fsync(const char *path, int isdatasync,
 		     struct fuse_file_info *fi)
 {
 	/* Just a stub.	 This method is optional and can safely be left
@@ -551,7 +526,7 @@ static int bhfs_fsync(const char *path, int isdatasync,
 }
 
 #ifdef HAVE_POSIX_FALLOCATE
-static int bhfs_fallocate(const char *path, int mode,
+static int whfs_fallocate(const char *path, int mode,
 			off_t offset, off_t length, struct fuse_file_info *fi)
 {
 	int fd;
@@ -580,7 +555,7 @@ static int bhfs_fallocate(const char *path, int mode,
 
 #ifdef HAVE_SETXATTR
 /* xattr operations are optional and can safely be left unimplemented */
-static int bhfs_setxattr(const char *path, const char *name, const char *value,
+static int whfs_setxattr(const char *path, const char *name, const char *value,
 			size_t size, int flags)
 {
 	int res;
@@ -596,7 +571,7 @@ static int bhfs_setxattr(const char *path, const char *name, const char *value,
 	return 0;
 }
 
-static int bhfs_getxattr(const char *path, const char *name, char *value,
+static int whfs_getxattr(const char *path, const char *name, char *value,
 			size_t size)
 {
 	int res;
@@ -611,7 +586,7 @@ static int bhfs_getxattr(const char *path, const char *name, char *value,
 	return res;
 }
 
-static int bhfs_listxattr(const char *path, char *list, size_t size)
+static int whfs_listxattr(const char *path, char *list, size_t size)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -625,7 +600,7 @@ static int bhfs_listxattr(const char *path, char *list, size_t size)
 	return res;
 }
 
-static int bhfs_removexattr(const char *path, const char *name)
+static int whfs_removexattr(const char *path, const char *name)
 {
 	int res;
 	char f_path[MAX_PATH];
@@ -640,54 +615,52 @@ static int bhfs_removexattr(const char *path, const char *name)
 }
 #endif /* HAVE_SETXATTR */
 
-static struct fuse_operations bhfs_oper = {
-	.getattr	= bhfs_getattr,
-	.access		= bhfs_access,
-	.readlink	= bhfs_readlink,
-	.readdir	= bhfs_readdir,
-	.mknod		= bhfs_mknod,
-	.mkdir		= bhfs_mkdir,
-	.symlink	= bhfs_symlink,
-	.unlink		= bhfs_unlink,
-	.rmdir		= bhfs_rmdir,
-	.rename		= bhfs_rename,
-	.link		= bhfs_link,
-	.chmod		= bhfs_chmod,
-	.chown		= bhfs_chown,
-	.truncate	= bhfs_truncate,
+static struct fuse_operations whfs_oper = {
+	.init		= whfs_init,
+	.getattr	= whfs_getattr,
+	.access		= whfs_access,
+	.readlink	= whfs_readlink,
+	.readdir	= whfs_readdir,
+	.mknod		= whfs_mknod,
+	.mkdir		= whfs_mkdir,
+	.symlink	= whfs_symlink,
+	.unlink		= whfs_unlink,
+	.rmdir		= whfs_rmdir,
+	.rename		= whfs_rename,
+	.link		= whfs_link,
+	.chmod		= whfs_chmod,
+	.chown		= whfs_chown,
+	.truncate	= whfs_truncate,
 #ifdef HAVE_UTIMENSAT
-	.utimens	= bhfs_utimens,
+	.utimens	= whfs_utimens,
 #endif
-	.open		= bhfs_open,
-	.read		= bhfs_read,
-	.write		= bhfs_write,
-	.statfs		= bhfs_statfs,
-	.release	= bhfs_release,
-	.fsync		= bhfs_fsync,
+	.open		= whfs_open,
+	.read		= whfs_read,
+	.write		= whfs_write,
+	.statfs		= whfs_statfs,
+	.release	= whfs_release,
+	.fsync		= whfs_fsync,
 #ifdef HAVE_POSIX_FALLOCATE
-	.fallocate	= bhfs_fallocate,
+	.fallocate	= whfs_fallocate,
 #endif
 #ifdef HAVE_SETXATTR
-	.setxattr	= bhfs_setxattr,
-	.getxattr	= bhfs_getxattr,
-	.listxattr	= bhfs_listxattr,
-	.removexattr	= bhfs_removexattr,
+	.setxattr	= whfs_setxattr,
+	.getxattr	= whfs_getxattr,
+	.listxattr	= whfs_listxattr,
+	.removexattr	= whfs_removexattr,
 #endif
 };
 
 void print_usage() {
 	fprintf(stderr,
-		"usage: bhfs [general options] [FUSE options] "
-		"-r gpgrecipient@example.com rootDir mountPoint\n"
+		"usage: whfs [general options] [FUSE options] "
+		"rootDir mountPoint\n"
 		"\n"
 		"general options:\n"
 		"    -o opt,[opt...]  mount options\n"
 		"    -h   --help      print help\n"
 		"    -V   --version   print version\n"
 		"\n"
-		"BHFS options:\n"
-		"    -r gpgrecipient@example.com   same as: '--recipient gpgrecipient@example.com'\n"
-		"                                           '-o recipient=gpgrecipient@example.com'\n"
 		"FUSE options:\n"
 		"-d   -o debug          enable debug output (implies -f)\n"
 		"-f                     foreground operation\n"
@@ -702,14 +675,14 @@ enum {
 	KEY_VERSION
 };
 
-#define BHFS_OPT(t, p, v) { t, offsetof(struct bhfs_config, p), v }
+#define whfs_OPT(t, p, v) { t, offsetof(struct whfs_config, p), v }
 
-static struct fuse_opt bhfs_opts[] = {
-	BHFS_OPT("-r %s",          recipient, 0),
-	BHFS_OPT("--recipient=%s", recipient, 0),
-	BHFS_OPT("recipient=%s",   recipient, 0),
-	BHFS_OPT("allow_other",    allow_other, 1),
-	BHFS_OPT("allow_root",     allow_other, 1),
+static struct fuse_opt whfs_opts[] = {
+	//whfs_OPT("-r %s",          recipient, 0),
+	//whfs_OPT("--recipient=%s", recipient, 0),
+	//whfs_OPT("recipient=%s",   recipient, 0),
+	whfs_OPT("allow_other",    allow_other, 1),
+	whfs_OPT("allow_root",     allow_other, 1),
 	
 	FUSE_OPT_KEY("-V",         KEY_VERSION),
 	FUSE_OPT_KEY("--version",  KEY_VERSION),
@@ -718,7 +691,7 @@ static struct fuse_opt bhfs_opts[] = {
 	FUSE_OPT_END
 };
 
-static int bhfs_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
+static int whfs_opt_proc(void *data, const char *arg, int key, struct fuse_args *outargs)
 {
 	static int nonopt_argument_position = 0;
 
@@ -727,13 +700,13 @@ static int bhfs_opt_proc(void *data, const char *arg, int key, struct fuse_args 
 		case KEY_HELP:
 			print_usage();
 			fuse_opt_add_arg(outargs, "-h");
-			fuse_main(outargs->argc, outargs->argv, &bhfs_oper, NULL);
+			fuse_main(outargs->argc, outargs->argv, &whfs_oper, NULL);
 			exit(1);
 
 		case KEY_VERSION:
 			fprintf(stderr, "BHFS version %s\n", PACKAGE_VERSION);
 			fuse_opt_add_arg(outargs, "--version");
-			fuse_main(outargs->argc, outargs->argv, &bhfs_oper, NULL);
+			fuse_main(outargs->argc, outargs->argv, &whfs_oper, NULL);
 			exit(0);
 
 		case FUSE_OPT_KEY_NONOPT:
@@ -762,23 +735,9 @@ int main(int argc, char *argv[])
 	memset(&conf, 0, sizeof(conf));
 	conf.allow_other=0;
 
-	fuse_opt_parse(&args, &conf, bhfs_opts, bhfs_opt_proc);
+	fuse_opt_parse(&args, &conf, whfs_opts, whfs_opt_proc);
 
 	int valid_conf = 0;
-
-	if (conf.recipient != NULL) {
-		fprintf(stderr, "Recipient is: %s\n", conf.recipient);
-		//TODO: check receipient is valid
-		//fprintf(stderr,
-		//	"ERROR: The recipient '%s' is invalid. \n"
-		//	"       Did you import the recipient's public key into GPG's public key ring?"
-		//	"		Make sure it's trusted!",
-		//	conf.recipient);
-	} else {
-		valid_conf = -1;
-		fprintf(stderr,
-			"ERROR: The recipient must be specified ('-r gpgrecipient@example.com').\n");
-	};
 
 	if (conf.rootdir != NULL) {
 		//TODO: implement validation of root directory
@@ -809,6 +768,6 @@ int main(int argc, char *argv[])
 		exit(1);
 	};
 
-	return fuse_main(args.argc, args.argv, &bhfs_oper, &conf);
+	return fuse_main(args.argc, args.argv, &whfs_oper, &conf);
 
 }
